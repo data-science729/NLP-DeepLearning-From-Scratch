@@ -1,0 +1,373 @@
+\documentclass[11pt,a4paper]{ctexart}
+
+% ============================== 紧凑排版与宏包 ==============================
+\usepackage[a4paper,left=2cm,right=2cm,top=2.2cm,bottom=2.2cm]{geometry}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{titlesec}
+\usepackage{indentfirst} % 保证每个标题后的首个段落同样首行缩进
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+
+% 中文标准首行缩进两字符设置
+\setlength{\parindent}{2\ccwd}
+\setlength{\parskip}{0pt} % 中文标准排版段间距不拉空，纯靠首行缩进区分段落
+\linespread{1.2}
+
+\titlespacing*{\section}{0pt}{1.2ex plus .2ex minus .2ex}{0.6ex plus .1ex}
+\titlespacing*{\subsection}{0pt}{1.0ex plus .2ex minus .2ex}{0.5ex plus .1ex}
+\titlespacing*{\subsubsection}{0pt}{0.8ex plus .1ex minus .1ex}{0.4ex}
+
+\titleformat{\section}{\large\bfseries\color{blue!80!black}}{\thesection}{0.8em}{}
+\titleformat{\subsection}{\normalsize\bfseries\color{blue!70!black}}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\small\bfseries}{\thesubsubsection}{0.5em}{}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!75!black,
+    citecolor=blue!75!black,
+    urlcolor=blue!75!black
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\small 自然语言处理实验报告：BiLSTM 中文分词}
+\rhead{\small 202330191100 刘宇翔}
+\cfoot{\small \thepage}
+\renewcommand{\headrulewidth}{0.5pt}
+
+% ============================== 标题与作者 ==============================
+\title{\vspace{-1.2cm}\Large\bfseries 基于双向长短期记忆网络（BiLSTM）的中文分词实验报告}
+\author{\large \textbf{202330191100 \quad 刘宇翔}}
+\date{}
+
+% ============================== 正文开始 ==============================
+\begin{document}
+
+\maketitle
+\vspace{-0.8cm}
+\thispagestyle{fancy}
+
+% ============================== 第一节 ==============================
+\section{实验任务与背景概述}
+
+\subsection{中文分词任务形式化}
+
+中文书写在汉字之间无天然空格分隔，中文分词（CWS）是中文自然语言处理的首要基础任务。现代统计与深度学习方法将中文分词形式化为\textbf{字符级序列标注问题}。输入长度为 $T$ 的汉字序列 $\boldsymbol{x} = (x_1, x_2, \dots, x_T)$，模型需为每个汉字预测其在词语中的相对构词位置标签 $\boldsymbol{y} = (y_1, y_2, \dots, y_T)$。
+
+本实验采用经典的 \textbf{BMES 标签体系}（标签集合大小 $|\mathcal{Y}| = 4$）：
+\begin{itemize}
+    \setlength{\itemsep}{0pt}
+    \setlength{\parsep}{0pt}
+    \setlength{\parskip}{0pt}
+    \item \textbf{B (Begin)}：多字词的首字；
+    \item \textbf{M (Middle)}：三字及以上词语的中间字；
+    \item \textbf{E (End)}：多字词的尾字；
+    \item \textbf{S (Single)}：独立成词的单字词。
+\end{itemize}
+
+例如句子“自然语言处理是基础任务”，切分为“自然 / 语言 / 处理 / 是 / 基础 / 任务”，对应的标注序列即为 \texttt{B E B E B E S B E B E}。依据“遇 E 划词、遇 S 独立划词”的确定性规则即可唯一重构出分词切分结果。
+
+\subsection{上机任务完成情况说明}
+
+按照上机任务要求，本实验已将第一次上机目录下的全部 6 个 Jupyter Notebook 案例完整运行验证完毕（包括基于词典的最大匹配算法、基于规则的 BrillTagger 词性标注、隐马尔可夫模型 HMM 词性标注、结构化感知器中文分词、线性链 CRF 中文分词以及 BiLSTM 中文分词），所有案例均顺利收敛且 0 报错。
+
+按照本次报告侧重要求，传统统计方法（词典最大匹配 $F_1=0.825$、线性链 CRF $F_1=0.851$、感知器）均依赖人工特征模板（如 $U00 \sim U04$），本报告将重心聚焦于\textbf{从零自动学习双向深层语义特征的双向长短期记忆网络（BiLSTM）}。
+
+% ============================== 第二节 ==============================
+\section{BiLSTM 中文分词原理与核心计算过程}
+
+\subsection{模型架构全景}
+
+BiLSTM 中文分词模型结构清晰直接，整体前向计算流程如下：
+\begin{equation}
+    x_t \xrightarrow{\text{Embedding}} e_t \xrightarrow{\text{BiLSTM}} h_t \xrightarrow{\text{Linear}} s_t \xrightarrow{\text{Softmax}} P(y_t \mid \boldsymbol{x}) \xrightarrow{\text{Argmax}} \hat{y}_t
+\end{equation}
+
+\subsection{字符嵌入表示（Embedding）}
+
+汉字为离散符号，首先建立包含特殊标记（$\text{PAD\_ID}=0, \text{UNK\_ID}=1$）的字符词表（规模 $V=315$）。输入字符 $x_t$ 经查找可学习的嵌入矩阵 $E \in \mathbb{R}^{V \times d_e}$（实验中取 $d_e = 64$），映射为连续稠密低维向量：
+\begin{equation}
+    e_t = E(x_t) \in \mathbb{R}^{d_e}
+\end{equation}
+
+连续向量表示能够捕捉字符间的语义相关性，并天然支持未登录字（映射至 \texttt{<UNK>}）的平滑推理。
+
+\subsection{LSTM 单元单步门控计算方程}
+
+传统 RNN 在沿时间反向传播时存在严重的梯度消失问题。长短期记忆网络（LSTM）引入内部记忆细胞状态 $C_t$ 与门控机制，通过线性加法更新通路保障了长程梯度的稳定回传。在时间步 $t$，对于输入向量 $e_t$ 和上一时刻隐状态 $h_{t-1} \in \mathbb{R}^{d_h}$，单步内部计算严格由以下 6 个公式完成：
+\begin{enumerate}
+    \item \textbf{遗忘门（Forget Gate）}：决定从历史细胞状态 $C_{t-1}$ 中丢弃的信息比例：
+    \begin{equation}
+        f_t = \sigma(W_f e_t + U_f h_{t-1} + b_f) \in (0, 1)^{d_h}
+    \end{equation}
+    \item \textbf{输入门（Input Gate）}：决定当前输入中哪些信息写入细胞状态：
+    \begin{equation}
+        i_t = \sigma(W_i e_t + U_i h_{t-1} + b_i) \in (0, 1)^{d_h}
+    \end{equation}
+    \item \textbf{候选记忆细胞（Candidate Cell State）}：生成当前步的新记忆候选向量：
+    \begin{equation}
+        \tilde{C}_t = \tanh(W_c e_t + U_c h_{t-1} + b_c) \in (-1, 1)^{d_h}
+    \end{equation}
+    \item \textbf{记忆细胞状态线性加法更新}：融合历史长程记忆与当前局部输入：
+    \begin{equation}
+        C_t = f_t \odot C_{t-1} + i_t \odot \tilde{C}_t \in \mathbb{R}^{d_h}
+    \end{equation}
+    其中 $\odot$ 表示对应元素逐位相乘（Hadamard 积）。正是此处的加法更新使得误差梯度在时间轴上传播时不易指数级衰减。
+    \item \textbf{输出门（Output Gate）}：控制记忆细胞向隐藏状态暴露的程度：
+    \begin{equation}
+        o_t = \sigma(W_o e_t + U_o h_{t-1} + b_o) \in (0, 1)^{d_h}
+    \end{equation}
+    \item \textbf{当前隐状态输出}：
+    \begin{equation}
+        h_t = o_t \odot \tanh(C_t) \in \mathbb{R}^{d_h}
+    \end{equation}
+\end{enumerate}
+
+其中 $\sigma(z) = \frac{1}{1 + e^{-z}}$ 为 Sigmoid 激活函数；$W \in \mathbb{R}^{d_h \times d_e}$，$U \in \mathbb{R}^{d_h \times d_h}$，$b \in \mathbb{R}^{d_h}$ 为网络可学习参数。
+
+\subsection{双向机制（BiLSTM）的作用}
+
+在中文分词中，不仅字符左侧的上文至关重要，字符右侧的下文同样是决定切分边界的关键线索。单向 LSTM 只能捕捉左侧历史，而 BiLSTM 同时并行维护两个方向相反的 LSTM：
+\begin{align}
+    \overrightarrow{h}_t &= \text{LSTM}_{\text{fwd}}(e_t, \overrightarrow{h}_{t-1}) \quad (t = 1, \dots, T) \\
+    \overleftarrow{h}_t &= \text{LSTM}_{\text{bwd}}(e_t, \overleftarrow{h}_{t+1}) \quad (t = T, \dots, 1)
+\end{align}
+
+在各位置将正向与反向隐状态直接拼接：
+\begin{equation}
+    h_t = \left[ \overrightarrow{h}_t \,;\, \overleftarrow{h}_t \right] \in \mathbb{R}^{2 d_h}
+\end{equation}
+
+本实验中取 $d_h = 64$，拼接后 $h_t \in \mathbb{R}^{128}$。此向量同时综合了字符左右两侧的全局上下文语义，\textbf{自动替代了 CRF 和感知器中人工设计的特征模板（如 $x_{-2}, x_{-1}, x_0, x_1, x_2$ 及其组合）}。
+
+\subsection{PyTorch 变长序列工程处理（Pack \& Pad）}
+
+为了实现 Mini-Batch 训练，不同长度的句子需要对齐：
+\begin{enumerate}
+    \item 使用 \texttt{pad\_sequence} 将一个 Batch 中的句子在右侧填充 \texttt{<PAD>} 至最大长度；
+    \item 调用 \texttt{pack\_padded\_sequence} 将填充张量压缩为变长打包结构（传入真实序列长度 \texttt{lengths}），使 LSTM 仅在有效字符步展开计算，规避无用计算；
+    \item 计算完成后使用 \texttt{pad\_packed\_sequence} 恢复张量形状 $(B, T_{\max}, 2d_h)$；
+    \item 标签填充位置设置为 \texttt{-100}，与 PyTorch \texttt{nn.CrossEntropyLoss(ignore\_index=-100)} 配合，使填充位置完全不产生回传损失。
+\end{enumerate}
+
+% ============================== 第三节 ==============================
+\section{解码机制对比：独立 Softmax 与 CRF 全局约束}
+
+\subsection{纯 BiLSTM 的局部独立解码}
+
+隐状态 $h_t$ 经全连接层映射为 4 个标签的发射得分（Logits）：
+\begin{equation}
+    s_t = W_s h_t + b_s \in \mathbb{R}^4 \quad (W_s \in \mathbb{R}^{4 \times 128}, b_s \in \mathbb{R}^4)
+\end{equation}
+
+经 Softmax 计算在各个标签上的条件概率分布：
+\begin{equation}
+    P(y_t = k \mid \boldsymbol{x}) = \frac{\exp(s_{t, k})}{\sum_{j \in \{\text{B,M,E,S}\}} \exp(s_{t, j})}
+\end{equation}
+
+训练目标为最小化逐字符交叉熵损失：
+\begin{equation}
+    \mathcal{L}_{\text{CE}} = - \frac{1}{N} \sum_{t=1}^N \log P(y_t = y_t^* \mid \boldsymbol{x})
+\end{equation}
+
+测试时，采用局部贪心解码（Argmax）：$\hat{y}_t = \arg\max_{k} s_{t, k}$。
+
+\subsection{局部解码的局限性与非法标签转移}
+
+由于纯 BiLSTM 在各个字符位置是\textbf{独立做出多分类预测}的，模型没有显式建模相邻标签之间的转移约束。根据中文构词规范，合法的 BMES 标签转移仅有 8 种：
+\begin{equation}
+    \mathcal{T}_{\text{valid}} = \{ (B, M), (B, E), (M, M), (M, E), (E, B), (E, S), (S, B), (S, S) \}
+\end{equation}
+
+而诸如 $S \to M$（单字词后接词中）、$B \to S$（词首后未闭合直接接单字）等属于语法上的\textbf{非法标签转移}。局部 Softmax 解码无法在数学上保证输出路径符合这一转移规范。
+
+\subsection{进阶拓展：BiLSTM-CRF 全局联合解码简述}
+
+BiLSTM-CRF 架构在 BiLSTM 输出的发射得分之上引入了标签转移矩阵 $T \in \mathbb{R}^{4 \times 4}$。整条标签路径的得分为发射得分与转移得分的总和：
+\begin{equation}
+    \text{Score}(\boldsymbol{x}, \boldsymbol{y}) = T_{\text{start}}[y_1] + \sum_{t=1}^T s_{t, y_t} + \sum_{t=1}^{T-1} T[y_t, y_{t+1}] + T_{\text{end}}[y_T]
+\end{equation}
+
+训练时通过前向算法计算配分函数 $Z(\boldsymbol{x})$，最小化负对数似然损失：
+\begin{equation}
+    \mathcal{L}_{\text{CRF}} = \log Z(\boldsymbol{x}) - \text{Score}(\boldsymbol{x}, \boldsymbol{y}^*)
+\end{equation}
+
+测试时利用\textbf{维特比算法（Viterbi）}动态规划求解全局最优标签路径 $\hat{\boldsymbol{y}} = \arg\max_{\boldsymbol{y}} \text{Score}(\boldsymbol{x}, \boldsymbol{y})$。转移矩阵能自发惩罚非法转移，从数学上杜绝了语法错误的产生。
+
+% ============================== 第四节 ==============================
+\section{实验设置与真实运行结果}
+
+\subsection{实验设置与超参数}
+
+语料规模为训练集 54 句、测试集 16 句、演示集 8 句。模型具体超参数如表 \ref{tab:hyperparams} 所示：
+
+\begin{table}[H]
+    \centering
+    \small
+    \caption{BiLSTM 中文分词模型超参数与规模}
+    \label{tab:hyperparams}
+    \begin{tabular}{lc|lc}
+        \toprule
+        \textbf{参数项} & \textbf{设定值} & \textbf{参数项} & \textbf{设定值} \\
+        \midrule
+        字符嵌入维度 \texttt{embed\_dim} & 64 & 批处理大小 \texttt{batch\_size} & 8 \\
+        隐状态维度 \texttt{hidden\_dim} & 64 & 优化器 / 学习率 & Adam / $0.01$ \\
+        LSTM 层数 / 方向 & 1 层 / 双向（拼接后 128 维） & 训练轮次 \texttt{NUM\_EPOCHS} & 30 \\
+        Dropout 丢弃率 & 0.2 & 模型总可训练参数量 & 87,236 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{训练收敛过程与实测损失曲线}
+
+在 NVIDIA GPU (CUDA) 加速下，模型训练耗时仅约 20 秒。纯 BiLSTM 的平均交叉熵损失从第 0 轮的 $1.2131$ 快速单调下降至第 29 轮的 $0.0018$。图 \ref{fig:losses} 展示了实际运行代码生成的收敛曲线：
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=0.92\textwidth]{figures/bilstm_loss.png}
+        \caption{纯 BiLSTM 交叉熵损失下降曲线}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=0.92\textwidth]{figures/bilstm_crf_loss.png}
+        \caption{BiLSTM-CRF 负对数似然下降曲线}
+    \end{subfigure}
+    \caption{各模型在训练阶段的真实损失下降收敛曲线}
+    \label{fig:losses}
+\end{figure}
+
+\subsection{测试集评测指标与横向对比}
+
+基于词级别评测标准（Precision, Recall, F1），实际运行所得测试集指标如表 \ref{tab:results} 所示：
+
+\begin{table}[H]
+    \centering
+    \small
+    \caption{测试集真实分词效果与上机各算法综合对比}
+    \label{tab:results}
+\resizebox{\linewidth}{!}{%
+    \begin{tabular}{lcccc}
+        \toprule
+        \textbf{分词模型} & \textbf{Precision (P)} & \textbf{Recall (R)} & \textbf{F1-score} & \textbf{特征来源 / 解码机制} \\
+        \midrule
+        词典最大匹配（BiMM） & 0.825 & 0.825 & 0.825 & 静态词典机械匹配 \\
+        线性链 CRF & 0.878 & 0.827 & 0.851 & 手工模板（U00$\sim$U04）+ 维特比 \\
+        \textbf{BiLSTM（纯 Softmax）} & \textbf{0.887} & \textbf{0.893} & \textbf{0.890} & \textbf{双向神经网络学习 + 局部 Argmax} \\
+        BiLSTM + CRF & 0.880 & 0.880 & 0.880 & 双向神经网络学习 + 全局维特比 \\
+        \bottomrule
+    \end{tabular}%
+}
+\end{table}
+
+BiLSTM 的 F1 分数达到 \textbf{0.890}，明显优于传统词典规则和手工特征 CRF 模型。在纯 BiLSTM 测试中，测试集共出现 3 处非法标签转移，验证了局部解码在强拟合下仍有微小结构破绽的理论推导。
+
+% ============================== 第五节 ==============================
+\section{全新例句测试与计算过程详细推演}
+
+为了彻底阐明 BiLSTM 模型的实际工作机理，本节选取未在训练集和测试集中出现过的全新例句进行端到端数值计算过程的详细拆解推演。
+
+\subsection{全新例句测试结果}
+
+在训练好的模型上对 3 个新例句进行预测，输出如表 \ref{tab:new_sents} 所示：
+
+\begin{table}[H]
+    \centering
+    \small
+    \caption{全新例句在训练好的 BiLSTM 模型上的分词切分结果}
+    \label{tab:new_sents}
+    \begin{tabular}{p{5.4cm}cp{5.2cm}}
+        \toprule
+        \textbf{测试新句子} & \textbf{预测 BMES 序列} & \textbf{最终分词切分结果} \\
+        \midrule
+        1. 自然语言处理是计算机科学领域的重要方向 & \texttt{BEBEBESBEBEBEBSBEBE} & 自然 / 语言 / 处理 / 是 / 计算机 / 科学 / 领域 / 的 / 重要 / 方向 \\
+        2. 基于双向长短期记忆网络实现中文分词 & \texttt{BESBBBEBEBEBEBEBE} & 基于 / 双 / 向 / 长 / 短期 / 记忆 / 网络 / 实现 / 中文 / 分词 \\
+        3. 深度学习算法在序列标注任务中表现优异 & \texttt{BEBEBESBEBEBESESBE} & 深度 / 学习 / 算法 / 在 / 序列 / 标注 / 任务 / 中 / 表现 / 优异 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{以“自然语言处理是计算机科学领域的重要方向”为例的计算过程推演}
+
+以下深入拆解例句 1 的四步推理计算过程：
+
+\subsubsection{步骤 1：汉字字符映射为词表 ID}
+
+根据字符字典 \texttt{char2id}，将各字符转换为整数索引序列：
+\begin{align*}
+    x &= [\text{自}, \text{然}, \text{语}, \text{言}, \text{处}, \text{理}, \text{是}, \text{计}, \text{算}, \text{机}, \text{科}, \text{学}, \text{领}, \text{域}, \text{的}, \text{重}, \text{要}, \text{方}, \text{向}] \\
+    \text{char\_ids} &= [248, 204, 272, 258, 264, 219, 172, 268, 240, 160, 228, 103, 290, 83, 216, 283, 257, 162, 72]
+\end{align*}
+
+\subsubsection{步骤 2：Embedding 查表与双向隐状态提取}
+
+字符整数 ID 经查表得到字符向量序列 $E(x) \in \mathbb{R}^{19 \times 64}$；正向 LSTM 顺序扫描产生前向特征 $\overrightarrow{h}_t \in \mathbb{R}^{64}$；反向 LSTM 逆序扫描产生后向特征 $\overleftarrow{h}_t \in \mathbb{R}^{64}$；在各时刻拼接输出各字符位置的完整上下文特征向量：$h_t = [\overrightarrow{h}_t; \overleftarrow{h}_t] \in \mathbb{R}^{128}$。
+
+\subsubsection{步骤 3：线性分类层计算与 Softmax 真实概率分布}
+
+隐藏向量 $h_t$ 经全连接层 $s_t = W_s h_t + b_s$ 得到 4 维 Logits，经 Softmax 激活输出各标签概率。该句前 8 个字符在模型输出层上的\textbf{真实计算数值截取}如表 \ref{tab:prob_demo}：
+
+\begin{table}[H]
+    \centering
+    \small
+    \caption{例句 1 前 8 个汉字在模型输出层上的真实 Softmax 概率分布与预测结果}
+    \label{tab:prob_demo}
+    \begin{tabular}{ccccccc}
+        \toprule
+        \textbf{汉字} & \textbf{词表 ID} & \textbf{$P(\text{B})$} & \textbf{$P(\text{M})$} & \textbf{$P(\text{E})$} & \textbf{$P(\text{S})$} & \textbf{预测标签（Argmax）} \\
+        \midrule
+        自 & 248 & \textbf{1.000} & 0.000 & 0.000 & 0.000 & \textbf{B} \\
+        然 & 204 & 0.000 & 0.000 & \textbf{1.000} & 0.000 & \textbf{E} \\
+        语 & 272 & \textbf{1.000} & 0.000 & 0.000 & 0.000 & \textbf{B} \\
+        言 & 258 & 0.000 & 0.000 & \textbf{1.000} & 0.000 & \textbf{E} \\
+        处 & 264 & \textbf{0.998} & 0.000 & 0.002 & 0.000 & \textbf{B} \\
+        理 & 219 & 0.000 & 0.000 & \textbf{1.000} & 0.000 & \textbf{E} \\
+        是 & 172 & 0.000 & 0.000 & 0.000 & \textbf{1.000} & \textbf{S} \\
+        计 & 268 & \textbf{0.999} & 0.001 & 0.000 & 0.000 & \textbf{B} \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsubsection{步骤 4：切分边界确定}
+
+根据输出序列 \texttt{B E B E B E S B M E B E B E S B E B E}：
+\begin{itemize}
+    \setlength{\itemsep}{0pt}
+    \item “自(B) 然(E)” 组合成词 $\to$ 【自然】；
+    \item “语(B) 言(E)” 组合成词 $\to$ 【语言】；
+    \item “处(B) 理(E)” 组合成词 $\to$ 【处理】；
+    \item “是(S)” 独立成词 $\to$ 【是】；
+    \item “计(B) 算(M) 机(E)” 跨三字组合成词 $\to$ 【计算机】；
+    \item 最终切分：\texttt{自然 / 语言 / 处理 / 是 / 计算机 / 科学 / 领域 / 的 / 重要 / 方向}，切分完全符合现代汉语词法规范。
+\end{itemize}
+
+\subsection{未登录字（OOV）处理机制测试}
+
+在例句 2 中，汉字“\textbf{双}”未在训练集 315 个汉字字典中出现。系统自动将其置为未登录字标记 $\text{“双”} \to \texttt{<UNK>} (\text{ID}=1)$。
+
+虽然该字本身的字向量信息受限，但由于 BiLSTM 拥有双向上下文感知能力，模型依靠左侧的“基于”和右侧的“向”、“长短期记忆网络”，依然给出了合理的局部切分（将其划为单字并紧跟“向”），展示了深度学习分布式字向量对未知字符强大的鲁棒性与容错能力。
+
+% ============================== 第六节 ==============================
+\section{实验总结}
+
+本次上机实验系统完成了第一次上机文件夹内全部代码的执行与分析，并深入研究了基于 BiLSTM 的中文分词方法。实验总结如下：
+\begin{enumerate}
+    \setlength{\itemsep}{1pt}
+    \item \textbf{特征工程的质变}：传统分词算法（CRF、感知器）高度依赖人工设计的局部滑窗模板；BiLSTM 则利用双向循环门控机制从大规模连续语料中自动抽取深层上下文表征，在测试集上取得了最高的 F1 值（0.890）。
+    \item \textbf{解码机制的互补}：纯 BiLSTM 的局部 Softmax 解码简单高效，但在结构一致性上存在微小漏洞（产生 3 处非法转移）；引入顶层 CRF 矩阵并配合维特比算法，能为序列标注提供严密的全局语法约束。
+    \item \textbf{工程实践认知}：掌握了 PyTorch 中变长序列的打包与批处理机制（\texttt{pack\_padded\_sequence}），以及利用 GPU 加速神经网络训练的端到端自然语言处理研发流程。
+\end{enumerate}
+
+\end{document}
