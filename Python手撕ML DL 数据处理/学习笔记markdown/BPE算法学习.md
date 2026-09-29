@@ -141,16 +141,250 @@ merges.append(best_pair)
 
 ---
 
-## 五、 当前进度复盘与后续步骤预告
+## 五、 第三步剖析：全语料替换合并（双指针跳步与语料库重构）
 
-```text
-【已完成】
-  ├── 步骤 1：遍历全语料，加权统计所有相邻 Token 对的频次 (defaultdict)
-  └── 步骤 2：利用 max(pairs, key=pairs.get) 精准锁定最高频 Pair
-
-【待完成（下一步）】
-  └── 步骤 3：在全语料中执行合并替换（把 'u' 和 'g' 合并为 'ug'，重构语料库）
+### 1. 核心代码
+```python
+new_corpus = {}
+first, second = best_pair
+for word, freq in corpus.items():
+    symbols = word.split()
+    new_symbols = []
+    i = 0
+    while i < len(symbols):
+        if i < len(symbols) - 1 and symbols[i] == first and symbols[i + 1] == second:
+            new_symbols.append(first + second)
+            i += 2  # 成功命中目标对，指针向前跳跃 2 步（跳过 first 和 second）
+        else:
+            new_symbols.append(symbols[i])
+            i += 1  # 未匹配，原样保留当前 token，指针仅前进一步
+    new_corpus[' '.join(new_symbols)] = freq
+corpus = new_corpus
 ```
 
-> **阶段思考总结**：  
-> 与单纯的数学算子不同，BPE 算法要求对字符串、列表切片、双指针滑动窗口以及字典键值对有极强的掌控力。第一步打通加权统计、第二步打通极值裁判后，最核心的骨架已经完全明朗。
+### 2. 语法点 1：元组解包 `first, second = best_pair`
+* `best_pair` 是一个二元元组，例如 `('u', 'g')`。
+* 利用 Python 的**序列解包（Tuple Unpacking）**，单行将其拆解为两个独立的字符串变量：`first = 'u'`，`second = 'g'`，代码可读性极高。
+
+### 3. 语法点 2：为什么必须用 `while` 循环？（不能用 `for` 的根本原因）
+* **`for i in range(...)` 的缺陷**：
+  Python 中的 `for` 循环是基于迭代器驱动的。如果写成 `for i in range(len(symbols)):`，即使在循环体内部执行 `i += 1` 或 `i += 2`，在下一轮循环开始时，`i` 依然会被 `range` 迭代器强制重置为下一个默认顺序值！因此，**`for` 循环无法实现动态跳跃步长**。
+* **`while` 循环的双指针跳步控制**：
+  * **命中合并（Hit）**：当连续两个 token 正好是 `first` 和 `second` 时，二者被熔接为一个新 token（`first + second`），此时必须**同时跳过这两个已消耗的 token**，即 `i += 2`。
+  * **未命中（Miss）**：当前 token 保持不变原样加入，指针继续探测下一个位置，即 `i += 1`。
+
+### 4. 语法点 3：`if i < len(symbols) - 1` 的边界与短路保护
+* **防越界防御**：与第一步类似，要检查 `symbols[i + 1]`，前提必须是 `i + 1` 不越界，即 `i < len(symbols) - 1`。
+* **短路求值（Short-circuit Evaluation）**：
+  在 Python 的 `and` 逻辑链中：
+  ```python
+  if i < len(symbols) - 1 and symbols[i] == first and symbols[i + 1] == second:
+  ```
+  如果 `i` 已经处于最后一个元素（`i < len(symbols) - 1` 为 `False`），Python 会**立即短路终止判断**，根本不会去执行后面的 `symbols[i + 1]`，从而绝对安全地避免了 `IndexError`。
+
+### 5. 语法点 4：`new_corpus[' '.join(new_symbols)] = freq` 深度剖析
+* **函数原型**：`str.join(iterable: Iterable[str]) -> str`
+  * **调用者（Caller）**：`' '`（以空格字符串作为分隔胶水）；
+  * **入参（Parameter）**：`new_symbols`（子词列表，如 `['h', 'ug', '</w>']`）；
+  * **返回值（Return）**：拼接后的完整新词字符串（如 `"h ug </w>"`）。
+* **形象比喻：剪刀与胶水**：
+  1. `symbols = word.split()`：用**剪刀**沿空格剪开，拆碎成单个零件列表进行加工；
+  2. `while` 内部处理：替换融合零件；
+  3. `' '.join(new_symbols)`：用**带空格的胶水**重新把零件串联起来。
+* **为什么胶水必须是 `' '` 而绝不能是 `''`？**
+  如果写成 `''.join(...)`，拼接出的结果会变成 `"hug</w>"`。当进入下一轮循环时，`word.split()` 默认按空格切分，切出来的列表将只有一个元素 `['hug</w>']`，导致根本无法再两两配对，整个算法在第二轮就会直接报废！
+
+### 6. 单词内部替换跟踪表（以 `"p u g s </w>"` 替换 `('u', 'g')` 为例）
+
+初始状态：`symbols = ['p', 'u', 'g', 's', '</w>']`，目标对：`first='u', second='g'`
+
+| 步数 | 当前指针 `i` | 当前检查项 | 是否匹配 `('u', 'g')` | 动作 | `new_symbols` 累积内容 | 下一步 `i` |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| 1 | `0` | `symbols[0]='p'` | 否 | `append('p')`，`i += 1` | `['p']` | `1` |
+| 2 | `1` | `('u', 'g')` | **是** | `append('ug')`，`i += 2` | `['p', 'ug']` | `3`（跳过 'g'） |
+| 3 | `3` | `symbols[3]='s'` | 否 | `append('s')`，`i += 1` | `['p', 'ug', 's']` | `4` |
+| 4 | `4` | `symbols[4]='</w>'` | 越界保护（已到末尾） | `append('</w>')`，`i += 1` | `['p', 'ug', 's', '</w>']` | `5` |
+| 5 | `5` | 循环终止条件 | `i >= len(symbols)` 退出 `while` | `' '.join(...)` 粘合写回 | `"p ug s </w>"` | 结束 |
+
+---
+
+## 六、 实战避坑警示录（编写过程中踩过的 2 大经典 Bug）
+
+手撕算法时，细微的变量名与拼接符差错都会引发隐蔽的系统级故障。以下是本题实战中真实经历的两个高价值避坑点：
+
+### 1. 经典 Bug 1：单复数笔误 —— `max(pair, key=pairs.get)`
+* **错误写法**：
+  ```python
+  best_pair = max(pair, key=pairs.get)  # 误写成了单数的 pair
+  ```
+* **引发异常**：
+  ```text
+  TypeError: '>' not supported between instances of 'NoneType' and 'NoneType'
+  ```
+* **底层根因**：
+  1. `pair` 是第一步统计内层循环遗留下来的一个二元元组，例如 `('s', '</w>')`。
+  2. 把元组传给 `max`，`max` 会把元组作为 `iterable` 遍历它的每个单字：`'s'` 和 `'</w>'`。
+  3. `max` 拿单字去调用 `pairs.get('s')`，但在字典 `pairs` 中，**所有的 Key 都是二元元组，根本不存在字符串类型的 Key**！
+  4. 于是 `pairs.get('s')` 返回 `None`，`pairs.get('</w>')` 也返回 `None`。
+  5. `max` 尝试比对两个候选者的分数 `None > None`，Python 瞬间抛出 `TypeError` 崩溃。
+* **规避法则**：比选打擂台时，传给 `max` 的必须是包含全量候选键的**复数字典 `pairs`**，即 `max(pairs, key=pairs.get)`。
+
+### 2. 经典 Bug 2：胶水用错 —— `new_corpus[''.join(new_symbols)] = freq`
+* **错误写法**：
+  ```python
+  new_corpus[''.join(new_symbols)] = freq  # 遗漏了空格，成了空字符串
+  ```
+* **引发后果**：
+  * 程序运行不报错，但第 1 轮结束后输出提前截止，测试用例预期 2 次合并却只合并了 1 次，返回 `[('u', 'g')]`。
+* **底层根因**：
+  1. 第 1 轮合并后，原语料 `"h u g </w>"` 被无缝连接成了 `"hug</w>"`（中间缺失了空格）；
+  2. 第 2 轮开始执行 `symbols = word.split()` 时，由于字符串中没有空格，切分结果变成了单元素列表 `['hug</w>']`；
+  3. `len(symbols) - 1` 计算为 `0`，`for i in range(0)` 直接跳过，导致 `pairs` 字典没有任何数据被加入；
+  4. 触发 `if not pairs: break` 判定，提前退出外层循环。
+* **规避法则**：牢记 BPE 语料库的**格式契约（Contract）**——“子词之间必须以空格隔开”。切碎与还原必须成对匹配：`split()` 切开，就必须用 `' '.join()` 拼回。
+
+---
+
+## 七、 BPE 的全生命周期：训练 vs 编码/推理 vs 词表生成
+
+初学者常常混淆：**“我们手撕的这道题到底算 BPE 的哪一部分？它和模型推理时的分词是一回事吗？”**  
+答案是：**我们手撕的是 BPE 最核心的【训练阶段（Training / Learning）】**。BPE 在工业落地中拥有完整的三阶段生命周期：
+
+```mermaid
+flowchart TD
+    subgraph 训练阶段["1. 训练阶段（Training / Learn BPE）- 本题核心"]
+        A["大规模无标注文本语料"] --> B["拆为单字符 + 统计词频"]
+        B --> C["循环：统计 Pair 频次 -> 锁定最高频 -> 合并语料"]
+        C --> D["产物 1：有序合并规则 merges（带优先级 rank）"]
+        C --> E["产物 2：最终词表 Vocabulary（初始字符 + 所有合并词）"]
+    end
+
+    subgraph 编码推理阶段["2. 编码/推理阶段（Encoding / Tokenize）"]
+        F["用户输入全新句子（如 'hugging'）"] --> G["拆为单字符序列 ['h','u','g','g','i','n','g','</w>']"]
+        G --> H{"查 merges 规则库\n（按训练时的 rank 贪心寻找最早规则）"}
+        D -.优先级注入.-> H
+        H --> I["输出 Token 序列: ['hug', 'ging', '</w>']"]
+        I --> J["映射为 Token ID 向量喂给 Transformer"]
+    end
+
+    subgraph 解码阶段["3. 解码阶段（Decoding / Detokenize）"]
+        K["模型生成的 Token ID 序列"] --> L["查词表逆向还原为子词字符串"]
+        L --> M["去除 </w> 并消除子词间隙，还原人类语言"]
+    end
+```
+
+### 1. 阶段一：训练阶段（Training / Vocabulary Construction）
+* **任务**：利用大规模静态文本库，从零“学习”出最划算的合并策略。
+* **核心动作**：即本题所实现的算法——加权统计、贪心选极值、全量语料重构。
+* **两大产物**：
+  1. **合并规则列表（`merges`）**：形如 `[('u', 'g'), ('ug', '</w>'), ...]`。规则在列表中的先后索引下标，即为该规则的**绝对优先级（Rank）**。
+  2. **最终词表（Vocabulary）**：
+     $$\text{词表} = \text{基础字母/标点字符集} \cup \text{所有合并产生的新子词}$$
+     （对应经典算法题：`3922. BPE 生成词表`）。
+
+### 2. 阶段二：编码/分词阶段（Encoding / Inference）
+* **任务**：在模型推理或训练输入前，把任意一个从未见过的新句子切分成子词。
+* **关键差异**：**此时不能再统计词频！因为单句根本没有全局词频可言**。
+* **推理逻辑**：
+  1. 将输入词拆成单个字符序列；
+  2. 遍历该序列中所有当前相邻的 Pair；
+  3. 去训练好的 `merges` 规则库中查询这些 Pair 的 Rank，**找出当前优先级最高（最先被学到）的那对 Pair 优先合并**；
+  4. 循环此过程，直到当前序列中的任何相邻 Pair 都不在规则库中为止。
+
+### 3. 阶段三：解码阶段（Decoding / Detokenization）
+* **任务**：大模型生成出数字列表（Token IDs）后，将其还原为自然语言文本。
+* **逻辑**：将 ID 映射为字符串碎片，去掉特殊结尾符（如 `</w>` 或 GPT 的 `Ġ`），拼接成完整文本。
+
+---
+
+## 八、 最终完整源码与严格测试用例
+
+```python
+"""
+字节对编码（Byte Pair Encoding, BPE）分词器 - 训练阶段实现
+"""
+from collections import defaultdict
+
+
+def bpe(corpus: dict[str, int], num_merges: int) -> list[tuple[str, str]]:
+    """
+    执行 BPE 算法的训练阶段，学习指定轮数的最佳合并规则。
+
+    Args:
+        corpus: 语料库字典，Key 为以空格分隔的当前 Token 序列，Value 为出现词频
+        num_merges: 允许的最大合并轮数
+
+    Returns:
+        merges: 记录每一次合并操作的有序元组列表，格式为 [(token1, token2), ...]
+    """
+    merges: list[tuple[str, str]] = []
+
+    for _ in range(num_merges):
+        # 1. 加权统计当前语料库中所有相邻 Token 对的频次
+        pairs = defaultdict(int)
+        for word, freq in corpus.items():
+            symbols = word.split()
+            for i in range(len(symbols) - 1):
+                pair = (symbols[i], symbols[i + 1])
+                pairs[pair] += freq
+
+        # 保护边界：若语料库已被完全合并（无法再形成配对），提前终止
+        if not pairs:
+            break
+
+        # 2. 找出当前频次最高的 Token 对（打擂台）
+        best_pair = max(pairs, key=pairs.get)
+        merges.append(best_pair)
+
+        # 3. 在语料库中全局替换并合并该 Token 对
+        new_corpus = {}
+        first, second = best_pair
+        for word, freq in corpus.items():
+            symbols = word.split()
+            new_symbols = []
+            i = 0
+            while i < len(symbols):
+                # 命中目标对，指针跃迁 2 步
+                if i < len(symbols) - 1 and symbols[i] == first and symbols[i + 1] == second:
+                    new_symbols.append(first + second)
+                    i += 2
+                else:
+                    new_symbols.append(symbols[i])
+                    i += 1
+            # 维持空格胶水契约，重构语料库
+            new_corpus[' '.join(new_symbols)] = freq
+        corpus = new_corpus
+
+    return merges
+
+
+if __name__ == '__main__':
+    print("=" * 60)
+    print("测试用例 1: 题目官方示例")
+    corpus = {"h u g </w>": 10, "p u g </w>": 5, "p u g s </w>": 5}
+    num_merges = 2
+    res = bpe(corpus, num_merges)
+    print(f"合并规则输出: {res}")
+    expected = [('u', 'g'), ('ug', '</w>')]
+    assert res == expected, f"用例 1 失败！预期 {expected}，实际 {res}"
+    print(">>> 判定: 通过！<<<")
+    print("=" * 60)
+```
+
+---
+
+## 九、 考研复试 / 算法面试高频考察要点（提问精粹）
+
+### Q1：BPE 算法的时间复杂度是多少？有哪些工程优化手段？
+* **基础版本复杂度**：设语料库总词数为 $V$，单词平均长度为 $L$，合并轮数为 $K$。每轮都需要全量遍历语料做加权统计与字符串重构，单轮复杂度为 $O(V \cdot L)$，总体复杂度为 $O(K \cdot V \cdot L)$。
+* **工程优化（如 HuggingFace Tokenizers 底层 Rust 实现）**：
+  1. **倒排索引（Inverted Index）**：记录每个 Pair 出现在哪些单词中。合并 `('u', 'g')` 时，无需扫描不相关的单词，只需定向更新包含该 Pair 的词条；
+  2. **最大堆 / 优先队列（Max Heap）**：维护 Pair 词频，避免每轮线性调用 `max()` 全量打擂台。
+
+### Q2：GPT 系列所用的 Byte-level BPE（BBPE）与经典 BPE 有什么区别？
+* **经典 BPE 的局限**：初始字符表基于 Unicode 字符（Characters）。世界上有数万个汉字、emoji 和特殊符号，导致初始基础字符表依然庞大，且遇到非常罕见的 Unicode 符号仍可能出现未知字符。
+* **Byte-level BPE（GPT-2 / LLaMA / Qwen）的破局点**：
+  * **一切皆字节（Byte）**：计算机底层所有文本本质上都是 utf-8 编码的字节序列（取值范围只有固定的 $0 \sim 255$）。
+  * 初始词表大小固定为**绝对不变量 256**！
+  * **收益**：从 256 个基础字节出发开始合并，**无论世界上任何语言、任何罕见字符还是 emoji，都能 100% 毫无死角地被分解和重构，从数学底层彻底杜绝了 OOV 问题**！
+
