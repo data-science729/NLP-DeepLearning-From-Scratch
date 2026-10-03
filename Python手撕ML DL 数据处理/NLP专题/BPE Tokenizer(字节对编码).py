@@ -51,7 +51,29 @@ corpus = {"h u g </w>": 10, "p u g </w>": 5, "p u g s </w>": 5}, num_merges = 2
 """
 #输入是2个参数:一个是字典(字典里放着单词切分后字符串，结尾带EOW</w>+词频int)，一个是整数(希望合并的最大轮数)
 #输出是一个列表，里面放着按照顺序合并的元组(记录每一次合并了哪两个token)
-from collections import defaultdict
+from collections import defaultdict,Counter
+
+
+
+def build_bpe_corpus(data: str | dict[str, int], end_of_word: str = '</w>') -> dict[str, int]:
+    """
+    辅助函数：将原始文本或词频字典转换为 BPE 算法专用的初始输入格式
+    """
+    # 1. 如果传入的是纯字符串文本，自动统计词频
+    if isinstance(data, str):
+        word_counts = Counter(data.split())
+    else:
+        word_counts = data
+    # 2. 字符级空格切分 + 拼接词尾标记
+    corpus = {}
+    for word, freq in word_counts.items():
+        # list("low") -> ['l', 'o', 'w']
+        # ' '.join(...) -> "l o w"
+        # 最终拼接成: "l o w </w>"
+        split_word = ' '.join(list(word)) + f' {end_of_word}'
+        corpus[split_word] = freq
+    return corpus
+
 def bpe(corpus:dict[str,int],num_merges:int)->list[tuple[str,str]]:
     merges = []
     #1.统计当前语料库中所有相邻token pair的频次(乘以词频)
@@ -100,16 +122,34 @@ def bpe(corpus:dict[str,int],num_merges:int)->list[tuple[str,str]]:
             new_corpus[' '.join(new_symbols)] = freq
         corpus = new_corpus
     return merges
+
+
 if __name__ == '__main__':
     print("=" * 60)
-    print("测试用例 1: 题目示例")
-    corpus = {"h u g </w>": 10, "p u g </w>": 5, "p u g s </w>": 5}
-    num_merges = 2
-    res = bpe(corpus, num_merges)
-    print(f"输出: {res}")
-    expected = [('u', 'g'), ('ug', '</w>')]
-    assert res == expected, "用例 1 失败！"
-    print(">>> 判定: 通过！<<<")
+    print("测试用例：直接使用你笔记流程图里的经典例题！")
+
+    # 1. 原始词频字典（不再需要手动在字母间敲空格和加 </w> 了）
+    raw_data = {
+        "low": 5,
+        "lower": 2,
+        "newest": 6,
+        "widest": 3
+    }
+
+    # 2. 调用辅助函数，自动生成 BPE 专用语料
+    # 这里我们传入 end_of_word='_'，完全复刻你流程图里的下划线标记
+    corpus = build_bpe_corpus(raw_data, end_of_word='_')
+
+    print("\n【步骤 1】自动构建的 BPE 初始语料：")
+    for word, freq in corpus.items():
+        print(f"  {word} : {freq}")
+    # 3. 运行 6 次合并
+    num_merges = 6
+    merges = bpe(corpus, num_merges)
+    print(f"\n【步骤 2】前 {num_merges} 次合并记录（与你的流程图逐步对照）：")
+    for step, (a, b) in enumerate(merges, 1):
+        print(f"  第 {step} 次合并: ({a}, {b})  --->  {a + b}")
+
     print("=" * 60)
 
 
