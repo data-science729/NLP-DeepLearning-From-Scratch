@@ -46,10 +46,15 @@ World 表：
 +-------------+------------+---------+
 """
 
+#输入表World (包含name,continent,area,population,gdp) 筛选条件或 |
+#题目输出 要求先population 后 area
+#多条件筛选必须加小括号(...) | (...)
 import pandas as pd
 
 def big_countries(world: pd.DataFrame) -> pd.DataFrame:
-    # 实现逻辑：
-    # df = world[(world['area'] >= 3000000) | (world['population'] >= 25000000)]
-    # return df[['name', 'population', 'area']]
-    pass
+    mask = (world['area']>=3000000) | (world['population']> 25000000)
+    filtered_df = world[mask]
+    result = filtered_df[['name','population','area']]
+    return result
+
+
