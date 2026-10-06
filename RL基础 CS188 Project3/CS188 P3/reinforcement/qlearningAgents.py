@@ -10,7 +10,7 @@
 # (denero@cs.berkeley.edu) and Dan Klein (klein@cs.berkeley.edu).
 # Student side autograding was added by Brad Miller, Nick Hay, and
 # Pieter Abbeel (pabbeel@cs.berkeley.edu).
-
+from fontTools.misc.bezierTools import epsilon
 
 from game import *
 from learningAgents import ReinforcementAgent
@@ -29,7 +29,7 @@ class QLearningAgent(ReinforcementAgent):
         - getAction                  (epsilon-贪心动作选择策略)
         - update                     (时序差分 TD 核心更新公式)
 
-      你可以直接使用的成员变量：
+      你可以直接使用的成员变量(意思就是父类的构造函数已经全部存好，我们不用写了直接用)：
         - self.epsilon   (探索率，epsilon 概率随机探索)
         - self.alpha     (学习率，更新步长)
         - self.discount  (折扣因子 gamma)
@@ -42,6 +42,8 @@ class QLearningAgent(ReinforcementAgent):
         ReinforcementAgent.__init__(self, **args)
 
         "*** YOUR CODE HERE ***"
+        self.q_values = util.Counter() #配一个表
+
 
     def getQValue(self, state, action):
         """
@@ -50,9 +52,10 @@ class QLearningAgent(ReinforcementAgent):
           否则返回存储在表中的 Q 值。
         """
         "*** YOUR CODE HERE ***"
+        return self.q_values[(state,action)]
         util.raiseNotDefined()
 
-
+   #最大值求取
     def computeValueFromQValues(self, state):
         """
           计算状态 state 的价值 V(s)：
@@ -60,7 +63,20 @@ class QLearningAgent(ReinforcementAgent):
           注意：如果没有合法动作（如终点状态），应返回 0.0。
         """
         "*** YOUR CODE HERE ***"
-        util.raiseNotDefined()
+        actions = self.getLegalActions(state)
+        if not actions:
+            return 0.0
+        max_q = float('-inf')
+        for action in actions:
+            q = self.getQValue(state,action)
+            if q>max_q:
+                max_q = q
+        return max_q
+
+
+
+
+
 
     def computeActionFromQValues(self, state):
         """
@@ -71,7 +87,17 @@ class QLearningAgent(ReinforcementAgent):
           2. 如果存在平局（多个动作的 Q 值相同且最大），应随机打破平局以保证充分探索。
         """
         "*** YOUR CODE HERE ***"
-        util.raiseNotDefined()
+        actions = self.getLegalActions(state)
+        if not actions:
+            return None
+        max_q = self.computeValueFromQValues(state)
+        #收集所有Q值等于最大值的动作
+        best_actions = [a for a in actions if self.getQValue(state,a) == max_q]
+        return random.choice(best_actions)
+
+
+
+
 
     def getAction(self, state):
         """
@@ -87,12 +113,20 @@ class QLearningAgent(ReinforcementAgent):
         """
         # 选择动作
         legalActions = self.getLegalActions(state)
-        action = None
-        "*** YOUR CODE HERE ***"
-        util.raiseNotDefined()
+        if not legalActions:
+            return None
+        if random.random()<self.epsilon:
+            return random.choice(legalActions)
+        else:
+            return self.computeActionFromQValues(state)
 
-        return action
 
+
+
+
+
+
+    #时序差分TD核心更新
     def update(self, state, action, nextState, reward):
         """
           当智能体经历一次环境交互 (state, action, nextState, reward) 时被调用。
@@ -103,7 +137,11 @@ class QLearningAgent(ReinforcementAgent):
           注意：你无需手动调用此函数，游戏模拟器会自动为你调用。
         """
         "*** YOUR CODE HERE ***"
-        util.raiseNotDefined()
+        sample = reward +self.discount*self.computeValueFromQValues(nextState)
+        self.q_values[(state,action)] = (1-self.alpha)*self.getQValue(state,action) +self.alpha*sample
+
+
+
 
     def getPolicy(self, state):
         return self.computeActionFromQValues(state)
@@ -166,7 +204,10 @@ class ApproximateQAgent(PacmanQAgent):
           提示：util.Counter 支持直接使用点积操作符或对应键乘积累加。
         """
         "*** YOUR CODE HERE ***"
-        util.raiseNotDefined()
+        #提取当前(state,action)的特征向量f
+        features = self.featExtractor.getFeatures(state,action)
+        return self.weights*features
+
 
     def update(self, state, action, nextState, reward):
         """
@@ -176,7 +217,12 @@ class ApproximateQAgent(PacmanQAgent):
           w_i <- w_i + alpha * difference * f_i(state, action)
         """
         "*** YOUR CODE HERE ***"
-        util.raiseNotDefined()
+        difference = (reward+self.discount*self.computeValueFromQValues(nextState)-self.getQValue(state,action))
+        features = self.featExtractor.getFeatures(state,action)
+        for feature in features:
+            self.weights[feature] += self.alpha*difference*features[feature]
+
+
 
     def final(self, state):
         "在每局游戏结束时被调用。"

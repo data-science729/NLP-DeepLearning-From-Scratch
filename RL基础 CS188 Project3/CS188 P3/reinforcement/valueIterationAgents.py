@@ -140,4 +140,64 @@ class PrioritizedSweepingValueIterationAgent(ValueIterationAgent):
     def runValueIteration(self):
         # 在此处编写优先队列值迭代代码（Q4 加分项）
         "*** YOUR CODE HERE ***"
+        #步骤1:构建每个状态的前驱节点集合
+        predecessors = {}
+        for s in self.mdp.getStates():
+            predecessors[s] = set()  #必须使用set存储以去重
+
+        #遍历所有状态和所有合法动作 找出能到达谁
+        for p in self.mdp.getStates():
+            if self.mdp.isTerminal(p):
+                continue
+            for action in self.mdp.getPossibleActions(p):
+                for next_states,prob in self.mdp.getTransitionStatesAndProbs(p,action):
+                    if prob>0:
+                        predecessors[next_states].add(p)
+
+        #步骤2:初始化优先级队列和第一轮误差入堆
+        pq = util.PriorityQueue()
+        for s in self.mdp.getStates():
+            if self.mdp.isTerminal(s):
+                continue
+            actions = self.mdp.getPossibleActions(s)
+            max_q = max(self.computeQValueFromValues(s,a) for a in actions)
+            diff = abs(self.values[s] - max_q)
+            pq.push(s,-diff)
+
+        #步骤3:主循环出堆更新 和前驱反向扩散
+        for iteration in range(self.iterations):
+            if pq.isEmpty():
+                break
+            s = pq.pop()
+
+            if not self.mdp.isTerminal(s):
+                actions = self.mdp.getPossibleActions(s)
+                max_q = max(self.computeQValueFromValues(s,a) for a in actions)
+                self.values[s] = max_q
+
+            for p in predecessors[s]:
+                if self.mdp.isTerminal(p):
+                    continue
+                p_actions = self.mdp.getPossibleActions(p)
+                p_max_q = max([self.computeQValueFromValues(p,a) for a in p_actions])
+                diff = abs(self.values[p] - p_max_q)
+
+                if diff>self.theta:
+                    pq.update(p,-diff)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

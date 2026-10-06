@@ -29,62 +29,67 @@ def question2():
     answerNoise =0.0
     return answerDiscount, answerNoise
 
+#近出口->discount要小，risk the cliff->Noise要小
 def question3a():
     """
     [Question 3a] 策略偏好：
     1. 偏好近的出口 (+1)；
     2. 愿意冒险走悬崖边（冒险近道）。
     """
-    answerDiscount = None
-    answerNoise = None
-    answerLivingReward = None
+    answerDiscount = 0.2
+    answerNoise = 0.0
+    answerLivingReward = 0.0
     return answerDiscount, answerNoise, answerLivingReward
     # 如果该策略不可能实现，返回 'NOT POSSIBLE'
 
+#近出口->discount要小，avoid the cliff->Noise要大  第一次错误:discount不能太小了(如0.01) 会导致极度短视只看 1~2 步，两步之外收益视为 0，根本不想走长路
 def question3b():
     """
     [Question 3b] 策略偏好：
     1. 偏好近的出口 (+1)；
     2. 避开悬崖，绕远路走安全通道（稳健近道）。
     """
-    answerDiscount = None
-    answerNoise = None
-    answerLivingReward = None
+    answerDiscount = 0.3
+    answerNoise = 0.3
+    answerLivingReward = 0.0
     return answerDiscount, answerNoise, answerLivingReward
     # 如果该策略不可能实现，返回 'NOT POSSIBLE'
 
+#远出口->discount要大，risk the cliff->Noise要小
 def question3c():
     """
     [Question 3c] 策略偏好：
     1. 偏好远的大奖出口 (+10)；
     2. 愿意冒险走悬崖边（冒险远道）。
     """
-    answerDiscount = None
-    answerNoise = None
-    answerLivingReward = None
+    answerDiscount = 0.9
+    answerNoise = 0.0
+    answerLivingReward = 0.0
     return answerDiscount, answerNoise, answerLivingReward
     # 如果该策略不可能实现，返回 'NOT POSSIBLE'
 
+#远出口->discount要大  avoid the cliff->Noise要大
 def question3d():
     """
     [Question 3d] 策略偏好：
     1. 偏好远的大奖出口 (+10)；
     2. 避开悬崖，绕远路走安全通道（稳健远道）。
     """
-    answerDiscount = None
-    answerNoise = None
-    answerLivingReward = None
+    answerDiscount = 0.9
+    answerNoise = 0.3
+    answerLivingReward = 0.0
     return answerDiscount, answerNoise, answerLivingReward
     # 如果该策略不可能实现，返回 'NOT POSSIBLE'
 
+#生存奖励要大
 def question3e():
     """
     [Question 3e] 策略偏好：
     永远避开所有出口和悬崖（每一轮游戏永远不结束，活着就有正奖励）。
     """
-    answerDiscount = None
-    answerNoise = None
-    answerLivingReward = None
+    answerDiscount =0.1
+    answerNoise = 0.0
+    answerLivingReward = 100
     return answerDiscount, answerNoise, answerLivingReward
     # 如果该策略不可能实现，返回 'NOT POSSIBLE'
 
@@ -97,7 +102,7 @@ def question7():
     """
     answerEpsilon = None
     answerLearningRate = None
-    return answerEpsilon, answerLearningRate
+    return 'NOT POSSIBLE'
     # 如果不可能，返回 'NOT POSSIBLE'
 
 if __name__ == '__main__':
